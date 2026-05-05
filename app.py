@@ -2,13 +2,14 @@
 # TD Wealth Locator Extractor - Streamlit Cloud version
 #
 # Required repo files:
-# app.py
-# requirements.txt
+# 1) app.py
+# 2) requirements.txt
+# 3) packages.txt
 #
 # IMPORTANT:
-# Do NOT use packages.txt.
-# Do NOT use playwright install-deps.
-# This app only uses: python -m playwright install chromium
+# - Use packages.txt for Linux dependencies.
+# - Do NOT use: playwright install-deps chromium
+# - This app only runs: python -m playwright install chromium
 
 import os
 import re
@@ -33,28 +34,54 @@ except Exception:
 
 # ----------------------------- Page Setup -----------------------------
 
-st.set_page_config(page_title="TD Wealth Locator Extractor", layout="wide")
+st.set_page_config(
+    page_title="TD Wealth Locator Extractor",
+    page_icon="🔎",
+    layout="wide",
+)
 
 st.markdown(
     """
 <style>
-.block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 3rem; }
-h1, h2, h3 { letter-spacing: -0.02em; }
-.card {
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.70);
-  border-radius: 18px;
-  padding: 16px 18px;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+.block-container {
+    max-width: 1180px;
+    padding-top: 2rem;
+    padding-bottom: 3rem;
 }
-.small-muted { color: rgba(0,0,0,0.55); font-size: 0.92rem; }
+
+h1, h2, h3 {
+    letter-spacing: -0.02em;
+}
+
+.card {
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(255,255,255,0.75);
+    border-radius: 18px;
+    padding: 16px 18px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+}
+
+.small-muted {
+    color: rgba(0,0,0,0.55);
+    font-size: 0.92rem;
+}
+
+.success-box {
+    border: 1px solid rgba(0,128,0,0.25);
+    background: rgba(0,128,0,0.06);
+    border-radius: 14px;
+    padding: 12px 14px;
+}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 st.title("TD Wealth Locator Extractor")
-st.caption("Searches TD Wealth locator by category, province, and multiple cities. Exports CSV and optional Excel.")
+st.caption(
+    "Searches TD Wealth locator by category, province, and multiple cities. "
+    "Exports CSV and optional Excel."
+)
 
 
 # ----------------------------- Constants -----------------------------
@@ -85,7 +112,10 @@ PROVINCE_OPTIONS = {
     "Yukon": "YT",
 }
 
-EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.I)
+EMAIL_RE = re.compile(
+    r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}",
+    re.I,
+)
 
 PHONE_RE = re.compile(
     r"\b(?:1[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}\b"
@@ -102,8 +132,15 @@ POSTAL_RE = re.compile(
 @st.cache_resource(show_spinner=False)
 def install_playwright_chromium_once():
     """
-    Installs Playwright Chromium once per Streamlit machine session.
-    Do NOT use install-deps. That causes apt conflicts on Streamlit Cloud.
+    Installs Playwright Chromium once per Streamlit Cloud machine session.
+
+    We only install the browser binary here.
+    Linux system libraries must come from packages.txt.
+
+    Do NOT use:
+        playwright install-deps chromium
+
+    That usually causes dependency conflicts on Streamlit Cloud.
     """
     try:
         result = subprocess.run(
@@ -113,6 +150,7 @@ def install_playwright_chromium_once():
             stderr=subprocess.PIPE,
             text=True,
         )
+
         return {
             "ok": True,
             "stdout": result.stdout,
@@ -129,19 +167,16 @@ def install_playwright_chromium_once():
 
 def launch_browser(playwright, slow_mo_ms: int):
     """
-    Launch Playwright Chromium using the browser installed by:
-    python -m playwright install chromium
+    Launch Chromium in a Streamlit Cloud friendly way.
     """
     try:
-        return playwright.chromium.launch(
+        browser = playwright.chromium.launch(
             headless=True,
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--disable-setuid-sandbox",
-                "--single-process",
-                "--no-zygote",
                 "--disable-extensions",
                 "--disable-background-networking",
                 "--disable-sync",
@@ -152,10 +187,19 @@ def launch_browser(playwright, slow_mo_ms: int):
             slow_mo=slow_mo_ms,
         )
 
+        return browser
+
     except Exception as e:
         st.error("Chromium failed to launch on Streamlit Cloud.")
-        st.write("The app installed Playwright Chromium, but the browser crashed when launching.")
-        st.write("Do not add packages.txt. Do not use install-deps.")
+        st.write(
+            "The Playwright browser installed, but Chromium crashed while opening."
+        )
+        st.write(
+            "This usually means one or more Linux browser libraries are missing from packages.txt."
+        )
+        st.write(
+            "Use packages.txt for Debian packages. Do not use playwright install-deps."
+        )
         st.code(str(e))
         st.stop()
 
@@ -163,6 +207,9 @@ def launch_browser(playwright, slow_mo_ms: int):
 # ----------------------------- Helpers -----------------------------
 
 def parse_city_filter(city_text: str) -> list[str]:
+    if not city_text:
+        return []
+
     return [c.strip() for c in city_text.split(",") if c.strip()]
 
 
@@ -239,6 +286,9 @@ def fill_first_working_input(page, value: str) -> bool:
 
 
 def press_search(page) -> None:
+    """
+    Tries Enter first, then common search/find buttons.
+    """
     try:
         page.keyboard.press("Enter")
         page.wait_for_timeout(2500)
@@ -297,15 +347,18 @@ def extract_profile_links_from_html(html: str, base_url: str) -> list[dict]:
             "digitalvault",
             "contact-us",
             "terms",
+            "cookie",
         ]
 
         if any(skip in lower_url for skip in skip_patterns):
             continue
 
-        links.append({
-            "link_text": text,
-            "profile_url": full_url,
-        })
+        links.append(
+            {
+                "link_text": text,
+                "profile_url": full_url,
+            }
+        )
 
     seen = set()
     out = []
@@ -376,17 +429,19 @@ def extract_result_cards_from_html(
         if len(lines) > 1:
             title = lines[1]
 
-        candidates.append({
-            "category": category,
-            "searched_city": city,
-            "province": province_code,
-            "name_or_branch": name,
-            "title": title,
-            "phone": " | ".join(phones[:3]),
-            "email": emails[0] if emails else "",
-            "address_hint": text[:500],
-            "profile_url": profile_url,
-        })
+        candidates.append(
+            {
+                "category": category,
+                "searched_city": city,
+                "province": province_code,
+                "name_or_branch": name,
+                "title": title,
+                "phone": " | ".join(phones[:3]),
+                "email": emails[0] if emails else "",
+                "address_hint": text[:500],
+                "profile_url": profile_url,
+            }
+        )
 
     if not candidates:
         return []
@@ -394,10 +449,13 @@ def extract_result_cards_from_html(
     df = pd.DataFrame(candidates)
 
     df["dedupe_key"] = (
-        df["profile_url"].fillna("") + "|" +
-        df["name_or_branch"].fillna("") + "|" +
-        df["phone"].fillna("") + "|" +
-        df["address_hint"].fillna("").str[:120]
+        df["profile_url"].fillna("")
+        + "|"
+        + df["name_or_branch"].fillna("")
+        + "|"
+        + df["phone"].fillna("")
+        + "|"
+        + df["address_hint"].fillna("").str[:120]
     ).str.lower()
 
     df = df.drop_duplicates(subset=["dedupe_key"], keep="first")
@@ -422,7 +480,10 @@ def search_td_locator(
 
     if not install_status["ok"]:
         st.error("Playwright Chromium install failed.")
-        st.write("Do not use packages.txt. Do not use install-deps.")
+        st.write(
+            "Do not use playwright install-deps. "
+            "Use packages.txt for Linux dependencies only."
+        )
         st.code(install_status["stderr"] or install_status["stdout"])
         st.stop()
 
@@ -444,19 +505,30 @@ def search_td_locator(
         page = context.new_page()
 
         try:
-            page.goto(TD_LOCATOR_URL, wait_until="domcontentloaded", timeout=60000)
+            page.goto(
+                TD_LOCATOR_URL,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+
             page.wait_for_timeout(int(wait_seconds * 1000))
 
             accept_cookies_if_present(page)
 
-            clicked_category = click_text_if_exists(page, category_button_text, timeout=7000)
+            clicked_category = click_text_if_exists(
+                page,
+                category_button_text,
+                timeout=7000,
+            )
 
             if not clicked_category:
-                errors.append({
-                    "city": city,
-                    "step": "category",
-                    "error": f"Could not click category: {category_button_text}",
-                })
+                errors.append(
+                    {
+                        "city": city,
+                        "step": "category",
+                        "error": f"Could not click category: {category_button_text}",
+                    }
+                )
 
             page.wait_for_timeout(1500)
 
@@ -466,11 +538,13 @@ def search_td_locator(
             filled = fill_first_working_input(page, search_location)
 
             if not filled:
-                errors.append({
-                    "city": city,
-                    "step": "input",
-                    "error": "Could not find/fill search input.",
-                })
+                errors.append(
+                    {
+                        "city": city,
+                        "step": "input",
+                        "error": "Could not find or fill search input.",
+                    }
+                )
 
                 html = page.content()
 
@@ -504,24 +578,28 @@ def search_td_locator(
                 links = extract_profile_links_from_html(html, TD_LOCATOR_URL)
 
                 for link in links:
-                    rows.append({
-                        "category": category_label,
-                        "searched_city": city,
-                        "province": province_code,
-                        "name_or_branch": link.get("link_text", ""),
-                        "title": "",
-                        "phone": "",
-                        "email": "",
-                        "address_hint": "",
-                        "profile_url": link.get("profile_url", ""),
-                    })
+                    rows.append(
+                        {
+                            "category": category_label,
+                            "searched_city": city,
+                            "province": province_code,
+                            "name_or_branch": link.get("link_text", ""),
+                            "title": "",
+                            "phone": "",
+                            "email": "",
+                            "address_hint": "",
+                            "profile_url": link.get("profile_url", ""),
+                        }
+                    )
 
         except Exception as e:
-            errors.append({
-                "city": city,
-                "step": "search",
-                "error": str(e),
-            })
+            errors.append(
+                {
+                    "city": city,
+                    "step": "search",
+                    "error": str(e),
+                }
+            )
 
         finally:
             try:
@@ -609,7 +687,13 @@ with c3:
         st.caption(f"Searching: {', '.join(selected_cities)}")
 
 with c4:
-    wait_seconds = st.slider("Wait after search seconds", 2.0, 15.0, 6.0, 0.5)
+    wait_seconds = st.slider(
+        "Wait after search seconds",
+        min_value=2.0,
+        max_value=15.0,
+        value=6.0,
+        step=0.5,
+    )
 
     max_cities = st.number_input(
         "Max cities 0 = no limit",
@@ -630,10 +714,10 @@ c5, c6, c7 = st.columns([1, 1, 1])
 with c5:
     slow_mo_ms = st.slider(
         "Browser slow motion ms",
-        0,
-        1000,
-        100,
-        50,
+        min_value=0,
+        max_value=1000,
+        value=100,
+        step=50,
         help="Keep this low on Streamlit Cloud.",
     )
 
@@ -657,7 +741,20 @@ run = st.button("Run TD Search", use_container_width=True)
 st.divider()
 
 if not run:
-    st.info("Choose category/province, enter one or more cities, then click **Run TD Search**.")
+    st.info(
+        "Choose category/province, enter one or more cities, then click **Run TD Search**."
+    )
+
+    with st.expander("Setup notes"):
+        st.write(
+            "- Your GitHub repo should contain `app.py`, `requirements.txt`, and `packages.txt`.\n"
+            "- Do not use `playwright install-deps chromium`.\n"
+            "- The app uses `python -m playwright install chromium` from inside Python.\n"
+            "- Linux browser libraries should be listed in `packages.txt`.\n"
+            "- Enter multiple cities separated by commas, like Richmond, Vancouver, Surrey.\n"
+            "- First run can take longer because Chromium installs."
+        )
+
     st.stop()
 
 if not selected_cities:
@@ -683,7 +780,9 @@ all_rows = []
 all_errors = []
 
 for idx, city in enumerate(selected_cities, start=1):
-    status.info(f"Searching TD locator for {category_label} in {city}, {province_label}...")
+    status.info(
+        f"Searching TD locator for {category_label} in {city}, {province_label}..."
+    )
 
     rows, errors = search_td_locator(
         category_label=category_label,
@@ -738,11 +837,15 @@ for col in final_cols:
 df = df[final_cols].copy()
 
 df["dedupe_key"] = (
-    df["category"].fillna("") + "|" +
-    df["searched_city"].fillna("") + "|" +
-    df["name_or_branch"].fillna("") + "|" +
-    df["phone"].fillna("") + "|" +
-    df["profile_url"].fillna("")
+    df["category"].fillna("")
+    + "|"
+    + df["searched_city"].fillna("")
+    + "|"
+    + df["name_or_branch"].fillna("")
+    + "|"
+    + df["phone"].fillna("")
+    + "|"
+    + df["profile_url"].fillna("")
 ).str.lower()
 
 df = df.drop_duplicates(subset=["dedupe_key"], keep="first")
@@ -778,11 +881,11 @@ if do_excel and OPENPYXL_OK:
 
 with st.expander("Setup notes"):
     st.write(
-        "- Your GitHub repo should have only `app.py` and `requirements.txt`.\n"
-        "- Delete `packages.txt` completely.\n"
+        "- Your GitHub repo should contain `app.py`, `requirements.txt`, and `packages.txt`.\n"
         "- Do not use `playwright install-deps chromium`.\n"
-        "- This app only runs `python -m playwright install chromium`.\n"
+        "- The app uses `python -m playwright install chromium` from inside Python.\n"
+        "- Linux browser libraries should be listed in `packages.txt`.\n"
         "- Enter multiple cities separated by commas, like Richmond, Vancouver, Surrey.\n"
-        "- First run may take 1-2 minutes while Chromium installs.\n"
-        "- If Chromium still fails to launch, Streamlit Cloud may not support this Playwright setup reliably."
+        "- First run can take longer because Chromium installs.\n"
+        "- If Chromium still fails, copy the exact missing `.so` file from the error log."
     )
