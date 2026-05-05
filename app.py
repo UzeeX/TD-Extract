@@ -97,38 +97,89 @@ POSTAL_RE = re.compile(
 
 # ----------------------------- Playwright Helpers -----------------------------
 
+def _run_cmd(cmd: list[str], label: str) -> tuple[bool, str]:
+    """Run a subprocess command and return (success, output_text)."""
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        return result.returncode == 0, output.strip()
+    except Exception as e:
+        return False, str(e)
+
+
 def ensure_playwright_browser():
     """
-    Installs Playwright Chromium at runtime if missing.
-    This avoids Streamlit Cloud apt conflicts from packages.txt.
+    Installs Playwright Chromium + its Linux system dependencies at runtime.
+
+    Root cause of the libglib-2.0.so.0 error:
+        `playwright install chromium` only downloads the Chromium binary.
+        It does NOT install the required Linux shared libraries
+        (libglib2.0-0, libnss3, libatk1.0-0, etc.).
+        Those must be installed separately via:
+            playwright install-deps chromium
+        which internally runs apt-get for the exact packages Chromium needs.
+
+    We run both steps once and cache a marker file so subsequent runs are fast.
     """
-    marker_path = "/tmp/playwright_chromium_installed_v3.txt"
+    marker_path = "/tmp/playwright_chromium_ready_v4.txt"
 
     if os.path.exists(marker_path):
         return
 
-    try:
-        with st.spinner("Installing Playwright Chromium. First run may take 1-2 minutes..."):
-            result = subprocess.run(
-                [sys.executable, "-m", "playwright", "install", "chromium"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+    with st.spinner("Setting up Playwright Chromium (first run only, ~2 min)..."):
+
+        # Step 1: Install the Chromium browser binary
+        ok, out = _run_cmd(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            "playwright install chromium",
+        )
+        if not ok:
+            st.error("Step 1 failed: playwright install chromium")
+            st.code(out)
+            st.stop()
+
+        # Step 2: Install the Linux system dependencies Chromium needs.
+        # This is the fix for:
+        #   libglib-2.0.so.0: cannot open shared object file: No such file or directory
+        # `playwright install-deps chromium` calls apt-get under the hood
+        # and installs exactly the shared libraries the downloaded binary requires.
+        # We try with sudo first (works on Streamlit Cloud), then without.
+        ok, out = _run_cmd(
+            ["sudo", sys.executable, "-m", "playwright", "install-deps", "chromium"],
+            "playwright install-deps chromium (sudo)",
+        )
+
+        if not ok:
+            # Fallback: try without sudo (local dev environments)
+            ok, out = _run_cmd(
+                [sys.executable, "-m", "playwright", "install-deps", "chromium"],
+                "playwright install-deps chromium (no sudo)",
             )
 
-        with open(marker_path, "w", encoding="utf-8") as f:
-            f.write("installed")
+        if not ok:
+            st.error("Step 2 failed: playwright install-deps chromium")
+            st.write(
+                "Chromium binary installed but its Linux system libraries could not be installed. "
+                "This is the `libglib-2.0.so.0` error. "
+                "On Streamlit Cloud this step requires sudo access. "
+                "If you see this, the Cloud environment may have changed its permissions."
+            )
+            st.code(out)
+            st.stop()
 
-    except subprocess.CalledProcessError as e:
-        st.error("Playwright Chromium install failed.")
-        st.code(e.stderr or e.stdout or str(e))
-        st.stop()
+    # Write marker only after both steps succeed
+    with open(marker_path, "w", encoding="utf-8") as f:
+        f.write("ready")
 
 
 def launch_cloud_browser(playwright, slow_mo_ms: int):
     """
-    Uses Playwright's downloaded Chromium.
+    Launches Playwright's own downloaded Chromium headless shell.
     Captures the real launch error instead of showing only Streamlit's redacted error.
     """
     try:
@@ -152,10 +203,7 @@ def launch_cloud_browser(playwright, slow_mo_ms: int):
         )
 
     except Exception as e:
-        st.error("Chromium failed to launch on Streamlit Cloud.")
-        st.write(
-            "This means Playwright installed, but the Cloud machine may be missing a required Linux dependency."
-        )
+        st.error("Chromium failed to launch.")
         st.code(str(e))
         st.stop()
 
@@ -773,8 +821,8 @@ with st.expander("Notes / troubleshooting"):
         "- Keep only `app.py` and `requirements.txt`.\n"
         "- Enter multiple cities separated by commas, like Richmond, Vancouver, Surrey.\n"
         "- Start with one city first to test.\n"
-        "- First run may take 1-2 minutes while Playwright installs Chromium.\n"
-        "- If Chromium fails to launch, the app will now show the real launch error.\n"
+        "- First run may take 1-2 minutes while Playwright installs Chromium + system deps.\n"
+        "- If Chromium fails to launch, the app will show the real launch error.\n"
         "- If no rows appear, increase wait time to 8-10 seconds.\n"
         "- TD may change the locator structure, so the app uses flexible parsing."
     )
