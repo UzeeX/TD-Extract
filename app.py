@@ -1,39 +1,12 @@
 # app.py
 # TD Wealth Locator Extractor - Streamlit Cloud version
 #
-# Repo files needed:
-# 1) app.py
-# 2) requirements.txt
-# 3) packages.txt
-#
-# requirements.txt:
-# streamlit
-# pandas
-# openpyxl
-# beautifulsoup4
-# playwright
-#
-# packages.txt:
-# chromium
-# libnss3
-# libnspr4
-# libatk1.0-0
-# libatk-bridge2.0-0
-# libcups2
-# libdrm2
-# libxkbcommon0
-# libxcomposite1
-# libxdamage1
-# libxfixes3
-# libxrandr2
-# libgbm1
-# libasound2
-# libpango-1.0-0
-# libcairo2
-# libatspi2.0-0
+# Required repo files:
+# app.py
+# requirements.txt
+# packages.txt
 
 import re
-import time
 from io import BytesIO
 from urllib.parse import urljoin
 
@@ -140,7 +113,8 @@ def clean_text(text: str) -> str:
 
 def launch_cloud_browser(playwright, slow_mo_ms: int):
     """
-    Streamlit Cloud uses system Chromium from packages.txt.
+    Streamlit Cloud version.
+    Uses system Chromium installed through packages.txt.
     """
     return playwright.chromium.launch(
         headless=True,
@@ -161,14 +135,6 @@ def launch_cloud_browser(playwright, slow_mo_ms: int):
     )
 
 
-def click_text_if_exists(page, text: str, timeout: int = 4000) -> bool:
-    try:
-        page.get_by_text(text, exact=False).first.click(timeout=timeout)
-        return True
-    except Exception:
-        return False
-
-
 def accept_cookies_if_present(page) -> None:
     cookie_texts = [
         "Accept all",
@@ -177,6 +143,7 @@ def accept_cookies_if_present(page) -> None:
         "Accept",
         "Agree",
         "Continue",
+        "Allow all",
     ]
 
     for txt in cookie_texts:
@@ -186,6 +153,14 @@ def accept_cookies_if_present(page) -> None:
             return
         except Exception:
             continue
+
+
+def click_text_if_exists(page, text: str, timeout: int = 4000) -> bool:
+    try:
+        page.get_by_text(text, exact=False).first.click(timeout=timeout)
+        return True
+    except Exception:
+        return False
 
 
 def fill_first_working_input(page, value: str) -> bool:
@@ -241,7 +216,7 @@ def press_search(page) -> None:
             continue
 
 
-def auto_scroll(page, steps: int = 8, delay_ms: int = 500) -> None:
+def auto_scroll(page, steps: int = 10, delay_ms: int = 500) -> None:
     for _ in range(steps):
         try:
             page.mouse.wheel(0, 1200)
@@ -278,11 +253,10 @@ def extract_profile_links_from_html(html: str, base_url: str) -> list[dict]:
         if any(skip in lower_url for skip in skip_patterns):
             continue
 
-        if text or "advisors.td.com" in lower_url:
-            links.append({
-                "link_text": text,
-                "profile_url": full_url,
-            })
+        links.append({
+            "link_text": text,
+            "profile_url": full_url,
+        })
 
     seen = set()
     out = []
@@ -307,13 +281,15 @@ def extract_result_cards_from_html(
     soup = BeautifulSoup(html, "html.parser")
     candidates = []
 
-    # Flexible parsing because TD locator markup can change.
     possible_nodes = soup.find_all(["li", "article", "section", "div"])
 
     for node in possible_nodes:
         text = clean_text(node.get_text(" ", strip=True))
 
         if not text or len(text) < 20:
+            continue
+
+        if len(text) > 2500:
             continue
 
         has_phone = bool(PHONE_RE.search(text))
@@ -349,10 +325,6 @@ def extract_result_cards_from_html(
 
         if len(lines) > 1:
             title = lines[1]
-
-        # Avoid giant page-level containers if possible.
-        if len(text) > 2500:
-            continue
 
         candidates.append({
             "category": category,
@@ -614,7 +586,7 @@ with c6:
     )
 
 with c7:
-    show_html_debug = st.toggle(
+    show_debug = st.toggle(
         "Show debug errors",
         value=True,
     )
@@ -675,7 +647,7 @@ for idx, city in enumerate(selected_cities, start=1):
 
 status.success("TD search complete.")
 
-if all_errors and show_html_debug:
+if all_errors and show_debug:
     st.subheader("Error samples")
     st.dataframe(pd.DataFrame(all_errors), use_container_width=True)
 
