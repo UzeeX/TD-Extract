@@ -6,8 +6,9 @@
 # requirements.txt
 #
 # IMPORTANT:
-# Delete packages.txt completely.
-# Do not use packages.txt for Chromium on Streamlit Cloud.
+# Do NOT use packages.txt.
+# Do NOT use playwright install-deps.
+# This app only uses: python -m playwright install chromium
 
 import os
 import re
@@ -20,6 +21,7 @@ import pandas as pd
 import streamlit as st
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+
 
 try:
     from openpyxl import Workbook
@@ -95,92 +97,40 @@ POSTAL_RE = re.compile(
 )
 
 
-# ----------------------------- Playwright Helpers -----------------------------
+# ----------------------------- Playwright Setup -----------------------------
 
-def _run_cmd(cmd: list[str], label: str) -> tuple[bool, str]:
-    """Run a subprocess command and return (success, output_text)."""
+@st.cache_resource(show_spinner=False)
+def install_playwright_chromium_once():
+    """
+    Installs Playwright Chromium once per Streamlit machine session.
+    Do NOT use install-deps. That causes apt conflicts on Streamlit Cloud.
+    """
     try:
         result = subprocess.run(
-            cmd,
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
-        output = (result.stdout or "") + "\n" + (result.stderr or "")
-        return result.returncode == 0, output.strip()
-    except Exception as e:
-        return False, str(e)
+        return {
+            "ok": True,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
+    except subprocess.CalledProcessError as e:
+        return {
+            "ok": False,
+            "stdout": e.stdout,
+            "stderr": e.stderr,
+        }
 
 
-def ensure_playwright_browser():
+def launch_browser(playwright, slow_mo_ms: int):
     """
-    Installs Playwright Chromium + its Linux system dependencies at runtime.
-
-    Root cause of the libglib-2.0.so.0 error:
-        `playwright install chromium` only downloads the Chromium binary.
-        It does NOT install the required Linux shared libraries
-        (libglib2.0-0, libnss3, libatk1.0-0, etc.).
-        Those must be installed separately via:
-            playwright install-deps chromium
-        which internally runs apt-get for the exact packages Chromium needs.
-
-    We run both steps once and cache a marker file so subsequent runs are fast.
-    """
-    marker_path = "/tmp/playwright_chromium_ready_v4.txt"
-
-    if os.path.exists(marker_path):
-        return
-
-    with st.spinner("Setting up Playwright Chromium (first run only, ~2 min)..."):
-
-        # Step 1: Install the Chromium browser binary
-        ok, out = _run_cmd(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-            "playwright install chromium",
-        )
-        if not ok:
-            st.error("Step 1 failed: playwright install chromium")
-            st.code(out)
-            st.stop()
-
-        # Step 2: Install the Linux system dependencies Chromium needs.
-        # This is the fix for:
-        #   libglib-2.0.so.0: cannot open shared object file: No such file or directory
-        # `playwright install-deps chromium` calls apt-get under the hood
-        # and installs exactly the shared libraries the downloaded binary requires.
-        # We try with sudo first (works on Streamlit Cloud), then without.
-        ok, out = _run_cmd(
-            ["sudo", sys.executable, "-m", "playwright", "install-deps", "chromium"],
-            "playwright install-deps chromium (sudo)",
-        )
-
-        if not ok:
-            # Fallback: try without sudo (local dev environments)
-            ok, out = _run_cmd(
-                [sys.executable, "-m", "playwright", "install-deps", "chromium"],
-                "playwright install-deps chromium (no sudo)",
-            )
-
-        if not ok:
-            st.error("Step 2 failed: playwright install-deps chromium")
-            st.write(
-                "Chromium binary installed but its Linux system libraries could not be installed. "
-                "This is the `libglib-2.0.so.0` error. "
-                "On Streamlit Cloud this step requires sudo access. "
-                "If you see this, the Cloud environment may have changed its permissions."
-            )
-            st.code(out)
-            st.stop()
-
-    # Write marker only after both steps succeed
-    with open(marker_path, "w", encoding="utf-8") as f:
-        f.write("ready")
-
-
-def launch_cloud_browser(playwright, slow_mo_ms: int):
-    """
-    Launches Playwright's own downloaded Chromium headless shell.
-    Captures the real launch error instead of showing only Streamlit's redacted error.
+    Launch Playwright Chromium using the browser installed by:
+    python -m playwright install chromium
     """
     try:
         return playwright.chromium.launch(
@@ -203,12 +153,14 @@ def launch_cloud_browser(playwright, slow_mo_ms: int):
         )
 
     except Exception as e:
-        st.error("Chromium failed to launch.")
+        st.error("Chromium failed to launch on Streamlit Cloud.")
+        st.write("The app installed Playwright Chromium, but the browser crashed when launching.")
+        st.write("Do not add packages.txt. Do not use install-deps.")
         st.code(str(e))
         st.stop()
 
 
-# ----------------------------- General Helpers -----------------------------
+# ----------------------------- Helpers -----------------------------
 
 def parse_city_filter(city_text: str) -> list[str]:
     return [c.strip() for c in city_text.split(",") if c.strip()]
@@ -275,10 +227,10 @@ def fill_first_working_input(page, value: str) -> bool:
     for selector in selectors:
         try:
             loc = page.locator(selector).first
-            loc.wait_for(state="visible", timeout=4000)
+            loc.wait_for(state="visible", timeout=5000)
             loc.fill("")
             loc.fill(value)
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(800)
             return True
         except Exception:
             continue
@@ -289,7 +241,7 @@ def fill_first_working_input(page, value: str) -> bool:
 def press_search(page) -> None:
     try:
         page.keyboard.press("Enter")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(2500)
     except Exception:
         pass
 
@@ -305,13 +257,13 @@ def press_search(page) -> None:
     for selector in possible_buttons:
         try:
             page.locator(selector).first.click(timeout=3000)
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(3000)
             return
         except Exception:
             continue
 
 
-def auto_scroll(page, steps: int = 10, delay_ms: int = 500) -> None:
+def auto_scroll(page, steps: int = 10, delay_ms: int = 600) -> None:
     for _ in range(steps):
         try:
             page.mouse.wheel(0, 1200)
@@ -343,6 +295,8 @@ def extract_profile_links_from_html(html: str, base_url: str) -> list[dict]:
             "easyweb",
             "webbroker",
             "digitalvault",
+            "contact-us",
+            "terms",
         ]
 
         if any(skip in lower_url for skip in skip_patterns):
@@ -403,6 +357,7 @@ def extract_result_cards_from_html(
             continue
 
         emails = sorted(set(EMAIL_RE.findall(text)))
+
         phones = [normalize_phone(p) for p in PHONE_RE.findall(text)]
         phones = list(dict.fromkeys([p for p in phones if p]))
 
@@ -463,12 +418,18 @@ def search_td_locator(
     rows = []
     errors = []
 
+    install_status = install_playwright_chromium_once()
+
+    if not install_status["ok"]:
+        st.error("Playwright Chromium install failed.")
+        st.write("Do not use packages.txt. Do not use install-deps.")
+        st.code(install_status["stderr"] or install_status["stdout"])
+        st.stop()
+
     search_location = f"{city}, {province_label}"
 
-    ensure_playwright_browser()
-
     with sync_playwright() as p:
-        browser = launch_cloud_browser(p, slow_mo_ms=slow_mo_ms)
+        browser = launch_browser(p, slow_mo_ms=slow_mo_ms)
 
         context = browser.new_context(
             viewport={"width": 1440, "height": 1000},
@@ -488,7 +449,7 @@ def search_td_locator(
 
             accept_cookies_if_present(page)
 
-            clicked_category = click_text_if_exists(page, category_button_text, timeout=6000)
+            clicked_category = click_text_if_exists(page, category_button_text, timeout=7000)
 
             if not clicked_category:
                 errors.append({
@@ -497,10 +458,10 @@ def search_td_locator(
                     "error": f"Could not click category: {category_button_text}",
                 })
 
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
 
             click_text_if_exists(page, "By Location", timeout=3000)
-            page.wait_for_timeout(700)
+            page.wait_for_timeout(800)
 
             filled = fill_first_working_input(page, search_location)
 
@@ -512,6 +473,7 @@ def search_td_locator(
                 })
 
                 html = page.content()
+
                 rows = extract_result_cards_from_html(
                     html=html,
                     base_url=TD_LOCATOR_URL,
@@ -526,7 +488,7 @@ def search_td_locator(
             press_search(page)
             page.wait_for_timeout(int(wait_seconds * 1000))
 
-            auto_scroll(page, steps=10, delay_ms=500)
+            auto_scroll(page, steps=10, delay_ms=600)
 
             html = page.content()
 
@@ -647,7 +609,7 @@ with c3:
         st.caption(f"Searching: {', '.join(selected_cities)}")
 
 with c4:
-    wait_seconds = st.slider("Wait after search seconds", 2.0, 12.0, 5.0, 0.5)
+    wait_seconds = st.slider("Wait after search seconds", 2.0, 15.0, 6.0, 0.5)
 
     max_cities = st.number_input(
         "Max cities 0 = no limit",
@@ -751,7 +713,7 @@ if all_errors and show_debug:
 if not all_rows:
     st.warning(
         "No rows were extracted. Try one city first, increase wait time to 8-10 seconds, "
-        "or check whether TD is showing bot/cookie protection."
+        "or TD may be blocking/headless browser automation."
     )
     st.stop()
 
@@ -814,15 +776,13 @@ if do_excel and OPENPYXL_OK:
     except Exception as e:
         st.warning(f"Excel export failed: {e}")
 
-with st.expander("Notes / troubleshooting"):
+with st.expander("Setup notes"):
     st.write(
-        "- This version is built for Streamlit Cloud.\n"
-        "- Delete `packages.txt` completely from GitHub.\n"
-        "- Keep only `app.py` and `requirements.txt`.\n"
+        "- Your GitHub repo should have only `app.py` and `requirements.txt`.\n"
+        "- Delete `packages.txt` completely.\n"
+        "- Do not use `playwright install-deps chromium`.\n"
+        "- This app only runs `python -m playwright install chromium`.\n"
         "- Enter multiple cities separated by commas, like Richmond, Vancouver, Surrey.\n"
-        "- Start with one city first to test.\n"
-        "- First run may take 1-2 minutes while Playwright installs Chromium + system deps.\n"
-        "- If Chromium fails to launch, the app will show the real launch error.\n"
-        "- If no rows appear, increase wait time to 8-10 seconds.\n"
-        "- TD may change the locator structure, so the app uses flexible parsing."
+        "- First run may take 1-2 minutes while Chromium installs.\n"
+        "- If Chromium still fails to launch, Streamlit Cloud may not support this Playwright setup reliably."
     )
