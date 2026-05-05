@@ -2,4 +2,4 @@ streamlit
 pandas
 openpyxl
 beautifulsoup4
-playwright==1.49.1
+playwright
