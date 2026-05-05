@@ -95,14 +95,14 @@ POSTAL_RE = re.compile(
 )
 
 
-# ----------------------------- Helpers -----------------------------
+# ----------------------------- Playwright Helpers -----------------------------
 
 def ensure_playwright_browser():
     """
     Installs Playwright Chromium at runtime if missing.
     This avoids Streamlit Cloud apt conflicts from packages.txt.
     """
-    marker_path = "/tmp/playwright_chromium_installed.txt"
+    marker_path = "/tmp/playwright_chromium_installed_v3.txt"
 
     if os.path.exists(marker_path):
         return
@@ -126,6 +126,42 @@ def ensure_playwright_browser():
         st.stop()
 
 
+def launch_cloud_browser(playwright, slow_mo_ms: int):
+    """
+    Uses Playwright's downloaded Chromium.
+    Captures the real launch error instead of showing only Streamlit's redacted error.
+    """
+    try:
+        return playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+                "--single-process",
+                "--no-zygote",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--disable-default-apps",
+                "--disable-popup-blocking",
+                "--disable-features=TranslateUI",
+            ],
+            slow_mo=slow_mo_ms,
+        )
+
+    except Exception as e:
+        st.error("Chromium failed to launch on Streamlit Cloud.")
+        st.write(
+            "This means Playwright installed, but the Cloud machine may be missing a required Linux dependency."
+        )
+        st.code(str(e))
+        st.stop()
+
+
+# ----------------------------- General Helpers -----------------------------
+
 def parse_city_filter(city_text: str) -> list[str]:
     return [c.strip() for c in city_text.split(",") if c.strip()]
 
@@ -144,30 +180,6 @@ def normalize_phone(phone: str) -> str:
 
 def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
-
-
-def launch_cloud_browser(playwright, slow_mo_ms: int):
-    """
-    Uses Playwright's downloaded Chromium.
-    Do not use /usr/bin/chromium.
-    Do not use packages.txt chromium.
-    """
-    return playwright.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--disable-setuid-sandbox",
-            "--disable-extensions",
-            "--disable-background-networking",
-            "--disable-sync",
-            "--disable-default-apps",
-            "--disable-popup-blocking",
-            "--disable-features=TranslateUI",
-        ],
-        slow_mo=slow_mo_ms,
-    )
 
 
 def accept_cookies_if_present(page) -> None:
@@ -762,6 +774,7 @@ with st.expander("Notes / troubleshooting"):
         "- Enter multiple cities separated by commas, like Richmond, Vancouver, Surrey.\n"
         "- Start with one city first to test.\n"
         "- First run may take 1-2 minutes while Playwright installs Chromium.\n"
+        "- If Chromium fails to launch, the app will now show the real launch error.\n"
         "- If no rows appear, increase wait time to 8-10 seconds.\n"
         "- TD may change the locator structure, so the app uses flexible parsing."
     )
