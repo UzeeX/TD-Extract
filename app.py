@@ -4,9 +4,15 @@
 # Required repo files:
 # app.py
 # requirements.txt
-# packages.txt
+#
+# IMPORTANT:
+# Delete packages.txt completely.
+# Do not use packages.txt for Chromium on Streamlit Cloud.
 
+import os
 import re
+import sys
+import subprocess
 from io import BytesIO
 from urllib.parse import urljoin
 
@@ -91,6 +97,35 @@ POSTAL_RE = re.compile(
 
 # ----------------------------- Helpers -----------------------------
 
+def ensure_playwright_browser():
+    """
+    Installs Playwright Chromium at runtime if missing.
+    This avoids Streamlit Cloud apt conflicts from packages.txt.
+    """
+    marker_path = "/tmp/playwright_chromium_installed.txt"
+
+    if os.path.exists(marker_path):
+        return
+
+    try:
+        with st.spinner("Installing Playwright Chromium. First run may take 1-2 minutes..."):
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        with open(marker_path, "w", encoding="utf-8") as f:
+            f.write("installed")
+
+    except subprocess.CalledProcessError as e:
+        st.error("Playwright Chromium install failed.")
+        st.code(e.stderr or e.stdout or str(e))
+        st.stop()
+
+
 def parse_city_filter(city_text: str) -> list[str]:
     return [c.strip() for c in city_text.split(",") if c.strip()]
 
@@ -113,12 +148,12 @@ def clean_text(text: str) -> str:
 
 def launch_cloud_browser(playwright, slow_mo_ms: int):
     """
-    Streamlit Cloud version.
-    Uses system Chromium installed through packages.txt.
+    Uses Playwright's downloaded Chromium.
+    Do not use /usr/bin/chromium.
+    Do not use packages.txt chromium.
     """
     return playwright.chromium.launch(
         headless=True,
-        executable_path="/usr/bin/chromium",
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
@@ -369,6 +404,8 @@ def search_td_locator(
     errors = []
 
     search_location = f"{city}, {province_label}"
+
+    ensure_playwright_browser()
 
     with sync_playwright() as p:
         browser = launch_cloud_browser(p, slow_mo_ms=slow_mo_ms)
@@ -720,10 +757,11 @@ if do_excel and OPENPYXL_OK:
 with st.expander("Notes / troubleshooting"):
     st.write(
         "- This version is built for Streamlit Cloud.\n"
-        "- You need `packages.txt` in the root of your GitHub repo with Chromium dependencies.\n"
+        "- Delete `packages.txt` completely from GitHub.\n"
+        "- Keep only `app.py` and `requirements.txt`.\n"
         "- Enter multiple cities separated by commas, like Richmond, Vancouver, Surrey.\n"
         "- Start with one city first to test.\n"
+        "- First run may take 1-2 minutes while Playwright installs Chromium.\n"
         "- If no rows appear, increase wait time to 8-10 seconds.\n"
-        "- TD may change the locator structure, so the app uses flexible parsing.\n"
-        "- If Streamlit Cloud errors mention Chromium, check that `packages.txt` exists in the repo root."
+        "- TD may change the locator structure, so the app uses flexible parsing."
     )
